@@ -110,26 +110,27 @@ func (this Proxy) is_authorized(w dns.ResponseWriter) bool {
 	return false
 }
 func (this Proxy) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
-	if !this.is_authorized(w) {
-		this.refused(w, request)
-		return
-	}
-	if cached := this.cache_get(request); cached != nil {
-		w.Write(cached)
-		return
-	}
-
-	c := new(dns.Client)
-	c.Net = "udp"
-	c.ReadTimeout = this.timeout
-	c.WriteTimeout = this.timeout
-	if response, err := c.Exchange(request, this.SERVERS[rand.Intn(len(this.SERVERS))]); err == nil {
-		this.cache_set(request, response)
-		w.Write(response)
-	} else {
-		this.refused(w, request)
-		log.Printf("%s error: %s", w.RemoteAddr(), err)
-	}
+        go func() {
+                if !this.is_authorized(w) {
+                        this.refused(w, request)
+                        return
+                }
+                if cached := this.cache_get(request); cached != nil {
+                                w.Write(cached)
+                        return
+                }
+                c := new(dns.Client)
+                c.Net = "udp"
+                c.ReadTimeout = this.timeout
+                c.WriteTimeout = this.timeout
+                if response, err := c.Exchange(request, this.SERVERS[rand.Intn(len(this.SERVERS))]); err == nil {
+                        this.cache_set(request, response)
+                        w.Write(response)
+                } else {
+                        this.refused(w, request)
+                        log.Printf("%s error: %s", w.RemoteAddr(), err)
+                }
+        }()
 }
 func _D(fmt string, v...interface{}) {
         if (DEBUG) {
