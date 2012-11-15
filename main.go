@@ -66,7 +66,8 @@ func (this Proxy) cache_set(req *dns.Msg, value *dns.Msg) {
 				expire = ttl
 			}
 		}
-		_D("STORE: caching %s for %d seconds\nREQUEST:%sCACHED:%s", key, expire, prettify_request(req), prettify_request(value))
+		_D("STORE: caching %s for %d seconds\n",key,expire)
+                //_D("REQUEST:%sCACHED:%s", expire, prettify_request(req), prettify_request(value))
 		this.CACHE[key] = &CacheEntry{expire_at: this.NOW + expire, message: *value}
 	}
 }
@@ -78,7 +79,8 @@ func (this Proxy) cache_get(req *dns.Msg) *dns.Msg {
 	if entry, ok := this.CACHE[key]; key != "" && ok && this.NOW < entry.expire_at {
 		message := entry.message
 		message.Id = req.Id
-		_D("GET: found valid cached entry with key: %s\nREQUEST:%sCACHED:%s", key, prettify_request(req), prettify_request(&message))
+		_D("GET: found valid cached entry with key: %s\n",key)
+                //_D("REQUEST:%sCACHED:%s", prettify_request(req), prettify_request(&message))
 		return &message
 	}
 	return nil
@@ -99,14 +101,12 @@ func (this Proxy) is_authorized(w dns.ResponseWriter) bool {
 	if err != nil {
 		return false
 	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return false
-	}
-	for _, mask := range this.ACCESS {
-		if mask.Contains(ip) {
-			return true
-		}
+	if ip := net.ParseIP(host); ip != nil {
+                for _, mask := range this.ACCESS {
+                        if mask.Contains(ip) {
+                                return true
+                        }
+                }
 	}
 	return false
 }
@@ -121,10 +121,10 @@ func (this Proxy) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
 		return
 	}
 	c := new(dns.Client)
-	c.Net = "tcp"
 	c.ReadTimeout = this.timeout
 	c.WriteTimeout = this.timeout
-	if response, err := c.Exchange(request, this.SERVERS[rand.Intn(this.s_len)]); err == nil {
+	if response, rtt, err := c.ExchangeRtt(request, this.SERVERS[rand.Intn(this.s_len)]); err == nil {
+                _D("%s: request took %s",w.RemoteAddr(),rtt)
 		this.cache_set(request, response)
 		w.Write(response)
 	} else {
