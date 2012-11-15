@@ -24,24 +24,24 @@ type Proxy struct {
 	SERVERS     []string
 	entries     int64
 	max_entries int64
-	giant       *sync.Mutex
+        NOW         int64
+	giant       *sync.RWMutex
 	timeout     time.Duration
 }
 
 func (this Proxy) expire_cache() {
 	expired := 0
-	this.giant.Lock()
 	this.entries = 0
-        now := time.Now().UTC().Unix()
+	this.giant.Lock()
+        defer this.giant.Unlock()
 	for k, v := range this.CACHE {
-		if (now > v.expire_at) {
+		if (this.NOW > v.expire_at) {
 			delete(this.CACHE, k)
 			expired += 1
 		} else {
 			this.entries += 1
 		}
 	}
-	this.giant.Unlock()
 	_D("expired %d entries, total: %d", expired, this.entries)
 }
 func (this Proxy) get_cache_key(req *dns.Msg) string {
@@ -55,6 +55,7 @@ func (this Proxy) get_cache_key(req *dns.Msg) string {
 func (this Proxy) cache_set(req *dns.Msg, value *dns.Msg) {
 	this.giant.Lock()
 	defer this.giant.Unlock()
+
 	key := this.get_cache_key(req)
 	if this.entries < this.max_entries && key != "" {
 		expire := int64(144000)
@@ -66,14 +67,15 @@ func (this Proxy) cache_set(req *dns.Msg, value *dns.Msg) {
 			}
 		}
 		_D("STORE: caching %s for %d seconds\nREQUEST:%sCACHED:%s", key, expire,prettify_request(req),prettify_request(value))
-		this.CACHE[key] = CacheEntry{expire_at: time.Now().UTC().Unix() + expire, message: value}
+		this.CACHE[key] = CacheEntry{expire_at: this.NOW + expire, message: value}
 	}
 }
 func (this Proxy) cache_get(req *dns.Msg) *dns.Msg {
-	this.giant.Lock()
-	defer this.giant.Unlock()
+	this.giant.RLock()
+	defer this.giant.RUnlock()
+
 	key := this.get_cache_key(req)
-	if entry, ok := this.CACHE[key]; key != "" && ok && time.Now().UTC().Unix() < entry.expire_at {
+	if entry, ok := this.CACHE[key]; key != "" && ok && this.NOW < entry.expire_at {
 		message := *entry.message
 		message.Id = req.Id
                 _D("GET: found valid cached entry with key: %s\nREQUEST:%sCACHED:%s",key,prettify_request(req),prettify_request(&message))
@@ -112,14 +114,15 @@ func (this Proxy) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
 		this.refused(w, request)
 		return
 	}
-	c := new(dns.Client)
-	c.Net = "udp"
-	c.ReadTimeout = this.timeout
-	c.WriteTimeout = this.timeout
 	if cached := this.cache_get(request); cached != nil {
 		w.Write(cached)
 		return
 	}
+
+	c := new(dns.Client)
+	c.Net = "udp"
+	c.ReadTimeout = this.timeout
+	c.WriteTimeout = this.timeout
 	if response, err := c.Exchange(request, this.SERVERS[rand.Intn(len(this.SERVERS))]); err == nil {
 		this.cache_set(request, response)
 		w.Write(response)
@@ -144,21 +147,23 @@ func main() {
                 S_ACCESS  string
                 timeout int
                 max_entries int64
-                expire_interval int
+                expire_interval int64
         )
 	flag.StringVar(&S_SERVERS, "proxy", "8.8.8.8:53,8.8.4.4:53", "we proxy requests to those servers")
 	flag.StringVar(&S_LISTEN, "listen", "[::]:53", "listen on (both tcp and udp)")
 	flag.StringVar(&S_ACCESS, "access", "127.0.0.0/8,10.0.0.0/8", "allow those networks, use 0.0.0.0/0 to allow everything")
 	flag.IntVar(&timeout, "timeout", 5, "timeout")
-	flag.IntVar(&expire_interval, "expire_interval", 300, "delete expired entries every N seconds")
+	flag.Int64Var(&expire_interval, "expire_interval", 300, "delete expired entries every N seconds")
 	flag.BoolVar(&DEBUG, "debug", false, "enable/disable debug")
 	flag.Int64Var(&max_entries, "max_cache_entries", 2000000, "max cache entries")
 	flag.Parse()
 	proxyer := Proxy{
 		CACHE:       make(map[string]CacheEntry),
-		giant:       new(sync.Mutex),
+		giant:       new(sync.RWMutex),
 		ACCESS:      make([]*net.IPNet, 0),
 		SERVERS:     strings.Split(S_SERVERS, ","),
+                NOW:         time.Now().UTC().Unix(),
+                entries:     0,
 		timeout:     time.Duration(timeout) * time.Second,
 		max_entries: max_entries}
 	for _, mask := range strings.Split(S_ACCESS, ",") {
@@ -183,9 +188,12 @@ func main() {
 			}
 		}()
 	}
-
 	for {
-		proxyer.expire_cache()
-		time.Sleep(time.Duration(expire_interval) * time.Second)
+                         
+                proxyer.NOW = time.Now().UTC().Unix()
+                if (proxyer.NOW % expire_interval) == 0 {
+		        proxyer.expire_cache()
+                }
+		time.Sleep(time.Duration(1) * time.Second)
 	}
 }
