@@ -69,9 +69,6 @@ func (this Proxy) cache_set(req *dns.Msg, value *dns.Msg) {
 		this.CACHE[key] = CacheEntry{expire_at: time.Now().UTC().Unix() + expire, message: value}
 	}
 }
-func prettify_request(req *dns.Msg) string{
-        return fmt.Sprintf("\n------------------------\n%s\n------------------------\n",req.String())
-}
 func (this Proxy) cache_get(req *dns.Msg) *dns.Msg {
 	this.giant.Lock()
 	defer this.giant.Unlock()
@@ -135,6 +132,9 @@ func _D(fmt string, v...interface{}) {
         if (DEBUG) {
                 log.Printf(fmt,v...)
         }
+}
+func prettify_request(req *dns.Msg) string{
+        return fmt.Sprintf("\n------------------------\n%s\n------------------------\n",req.String())
 }
 func main() {
 
