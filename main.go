@@ -12,19 +12,10 @@ import (
 	"time"
 )
 
-var (
-	S_SERVERS string
-	S_LISTEN  string
-	S_ACCESS  string
-)
-
+var DEBUG bool
 type CacheEntry struct {
 	expire_at int64
 	message   *dns.Msg
-}
-
-func (this CacheEntry) is_valid() bool {
-	return (time.Now().UTC().Unix() < this.expire_at)
 }
 
 type Proxy struct {
@@ -41,8 +32,9 @@ func (this Proxy) expire_cache() {
 	expired := 0
 	this.giant.Lock()
 	this.entries = 0
+        now := time.Now().UTC().Unix()
 	for k, v := range this.CACHE {
-		if !v.is_valid() {
+		if (now > v.expire_at) {
 			delete(this.CACHE, k)
 			expired += 1
 		} else {
@@ -50,7 +42,7 @@ func (this Proxy) expire_cache() {
 		}
 	}
 	this.giant.Unlock()
-	log.Printf("expired %d entries, total: %d", expired, this.entries)
+	_D("expired %d entries, total: %d", expired, this.entries)
 }
 func (this Proxy) get_cache_key(req *dns.Msg) string {
 	key := ""
@@ -73,17 +65,21 @@ func (this Proxy) cache_set(req *dns.Msg, value *dns.Msg) {
 				expire = ttl
 			}
 		}
-		//log.Printf("caching %s for %d", key, expire)
+		_D("STORE: caching %s for %d seconds\nREQUEST:%sCACHED:%s", key, expire,prettify_request(req),prettify_request(value))
 		this.CACHE[key] = CacheEntry{expire_at: time.Now().UTC().Unix() + expire, message: value}
 	}
+}
+func prettify_request(req *dns.Msg) string{
+        return fmt.Sprintf("\n------------------------\n%s\n------------------------\n",req.String())
 }
 func (this Proxy) cache_get(req *dns.Msg) *dns.Msg {
 	this.giant.Lock()
 	defer this.giant.Unlock()
 	key := this.get_cache_key(req)
-	if entry, ok := this.CACHE[key]; key != "" && ok && entry.is_valid() {
+	if entry, ok := this.CACHE[key]; key != "" && ok && time.Now().UTC().Unix() < entry.expire_at {
 		message := *entry.message
 		message.Id = req.Id
+                _D("GET: found valid cached entry with key: %s\nREQUEST:%sCACHED:%s",key,prettify_request(req),prettify_request(&message))
 		return &message
 	}
 	return nil
@@ -135,14 +131,27 @@ func (this Proxy) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
 		log.Printf("%s error: %s", w.RemoteAddr(), err)
 	}
 }
-
+func _D(fmt string, v...interface{}) {
+        if (DEBUG) {
+                log.Printf(fmt,v...)
+        }
+}
 func main() {
-	var timeout int
-	var max_entries int64
+
+        var (
+                S_SERVERS string
+                S_LISTEN  string
+                S_ACCESS  string
+                timeout int
+                max_entries int64
+                expire_interval int
+        )
 	flag.StringVar(&S_SERVERS, "proxy", "8.8.8.8:53,8.8.4.4:53", "we proxy requests to those servers")
 	flag.StringVar(&S_LISTEN, "listen", "[::]:53", "listen on (both tcp and udp)")
 	flag.StringVar(&S_ACCESS, "access", "127.0.0.0/8,10.0.0.0/8", "allow those networks, use 0.0.0.0/0 to allow everything")
 	flag.IntVar(&timeout, "timeout", 5, "timeout")
+	flag.IntVar(&expire_interval, "expire_interval", 300, "delete expired entries every N seconds")
+	flag.BoolVar(&DEBUG, "debug", false, "enable/disable debug")
 	flag.Int64Var(&max_entries, "max_cache_entries", 2000000, "max cache entries")
 	flag.Parse()
 	proxyer := Proxy{
@@ -157,10 +166,11 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		log.Printf("added %s\n", mask)
+                _D("added access for %s\n", mask)
 		proxyer.ACCESS = append(proxyer.ACCESS, cidr)
 	}
 	for _, addr := range strings.Split(S_LISTEN, ",") {
+                _D("listening @ %s\n",addr)
 		go func() {
 			if err := dns.ListenAndServe(addr, "udp", proxyer); err != nil {
 				log.Fatal(err)
@@ -176,6 +186,6 @@ func main() {
 
 	for {
 		proxyer.expire_cache()
-		time.Sleep(time.Duration(20) * time.Second)
+		time.Sleep(time.Duration(expire_interval) * time.Second)
 	}
 }
