@@ -90,11 +90,11 @@ func (this Proxy) refused(w dns.ResponseWriter, req *dns.Msg) {
 	m := new(dns.Msg)
 	for _, r := range req.Extra {
 		if r.Header().Rrtype == dns.TypeOPT {
-			m.SetEdns0(4096, r.(*dns.RR_OPT).Do())
+			m.SetEdns0(4096, r.(*dns.OPT).Do())
 		}
 	}
 	m.SetRcode(req, dns.RcodeRefused)
-	w.Write(m)
+	w.WriteMsg(m)
 }
 func (this Proxy) is_authorized(w dns.ResponseWriter) bool {
 	host, _, err := net.SplitHostPort(w.RemoteAddr().String())
@@ -117,16 +117,16 @@ func (this Proxy) ServeDNS(w dns.ResponseWriter, request *dns.Msg) {
 		return
 	}
 	if cached := this.cache_get(request); cached != nil {
-		w.Write(cached)
+		w.WriteMsg(cached)
 		return
 	}
 	c := new(dns.Client)
 	c.ReadTimeout = this.timeout
 	c.WriteTimeout = this.timeout
-	if response, rtt, err := c.ExchangeRtt(request, this.SERVERS[rand.Intn(this.s_len)]); err == nil {
+	if response, rtt, err := c.Exchange(request, this.SERVERS[rand.Intn(this.s_len)]); err == nil {
 		_D("%s: request took %s", w.RemoteAddr(), rtt)
 		this.cache_set(request, response)
-		w.Write(response)
+		w.WriteMsg(response)
 	} else {
 		this.refused(w, request)
 		log.Printf("%s error: %s", w.RemoteAddr(), err)
